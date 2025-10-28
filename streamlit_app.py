@@ -20,12 +20,7 @@ from streamlit_autorefresh import st_autorefresh
 # ------------------------------
 # 🔧 CONFIG — set your backend
 # ------------------------------
-# Uses your Render URL by default; can still be overridden by env var.
-BACKEND_URL = os.environ.get(
-    "HEALER_BACKEND_URL",
-    "https://ai-workflow-healer-hackathon-1.onrender.com"
-).rstrip("/")
-
+BACKEND_URL = os.environ.get("HEALER_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 AUTO_TRIGGER_SECONDS = 15
 AUTO_REFRESH_MS = 5000
 HTTP_TIMEOUT = 15
@@ -210,6 +205,7 @@ manual_section = st.sidebar.toggle("🧩 Manual Healing", value=True)
 st.sidebar.markdown("---")
 st.sidebar.subheader("Quick Actions")
 if st.sidebar.button("▶️ Single Auto Trigger Now"):
+    # force an immediate auto tick
     st.session_state.last_auto = 0.0
 
 if st.sidebar.button("🧪 Simulate Heal (/simulate)"):
@@ -221,6 +217,7 @@ if st.sidebar.button("🧪 Simulate Heal (/simulate)"):
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Data")
+ok_dl, _ = _get_json("/health")  # preflight to avoid long error
 try:
     r = requests.get(_url("/metrics/download"), timeout=HTTP_TIMEOUT)
     if r.ok and r.content:
@@ -243,7 +240,7 @@ st.sidebar.caption("✨ Neon Hackathon Theme — Bright Mode")
 # 🏷️ HEADER + HEALTH BADGE
 # ------------------------------
 ok_health, health = _get_json("/health")
-health_badge = "🟢 <span class='health-ok'>Healthy</span>" if ok_health and isinstance(health, dict) and health.get("status") == "ok" else "🔴 <span class='health-bad'>Down</span>"
+health_badge = "🟢 <span class='health-ok'>Healthy</span>" if ok_health and health.get("status") == "ok" else "🔴 <span class='health-bad'>Down</span>"
 
 st.markdown(
     f"""
@@ -268,7 +265,7 @@ should_trigger = (
 
 if should_trigger:
     st.session_state.auto_inflight = True
-    st.session_state.last_auto = now
+    st.session_state.last_auto = now  # set early to avoid double-fire on slow net
     payload = {
         "workflow_id": random.choice(workflow_choices()),
         "anomaly": random.choice(anomaly_choices()),
@@ -411,6 +408,7 @@ with c1:
     st.markdown("### 💰 Revenue Records")
     rev_logs = revenue.get("logs") or []
     if isinstance(rev_logs, list) and rev_logs:
+        # ensure it frames even if dicts have different keys
         df = pd.json_normalize(rev_logs)
         st.dataframe(df, use_container_width=True)
     else:
