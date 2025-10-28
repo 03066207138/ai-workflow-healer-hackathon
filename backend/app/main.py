@@ -1,9 +1,8 @@
 # ============================================================
-# 🌐 IBM Workflow Healing Agent — Prototype-to-Profit Edition
-# Real-Time Integration: Paywalls.ai + FlowXO
+# 🌐 IBM Workflow Healing Agent — Prototype-to-Profit (v4.0)
+# Real-Time Monetization + FlowXO + PDF Slip Generation
 # ============================================================
 
-from dotenv import load_dotenv
 import os
 import math
 import random
@@ -11,13 +10,15 @@ import requests
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+from io import BytesIO
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from io import BytesIO
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from dotenv import load_dotenv
+from fpdf import FPDF
 
 # ============================================================
-# 🔹 Load Environment Variables and Imports
+# 🔹 Load Environment Variables
 # ============================================================
 load_dotenv()
 print(
@@ -31,16 +32,28 @@ print(
     str(os.getenv("FLOWXO_WEBHOOK_URL"))[:25],
 )
 
-from .settings import settings
-from .healing.executor import HealingExecutor
-from .healing import policies
-from .telemetry.simulator import sim
-from .utils.metrics_logger import MetricsLogger
-from .integrations.paywalls_client import bill_healing_event
+# ============================================================
+# 📦 Internal Imports
+# ============================================================
+try:
+    from .settings import settings
+    from .healing.executor import HealingExecutor
+    from .healing import policies
+    from .telemetry.simulator import sim
+    from .utils.metrics_logger import MetricsLogger
+    from .integrations.paywalls_client import bill_healing_event
+except ImportError:
+    from settings import settings
+    from healing.executor import HealingExecutor
+    from healing import policies
+    from telemetry.simulator import sim
+    from utils.metrics_logger import MetricsLogger
+    from integrations.paywalls_client import bill_healing_event
 
 # ============================================================
 # ⚙️ Initialize Core Components
 # ============================================================
+os.makedirs("data", exist_ok=True)
 metrics_logger = MetricsLogger(Path(settings.METRICS_LOG_PATH))
 executor = HealingExecutor()
 
@@ -49,13 +62,14 @@ use_watsonx = bool(os.getenv("WATSONX_API_KEY")) and bool(os.getenv("WATSONX_PRO
 use_paywalls = bool(os.getenv("PAYWALLS_API_KEY") or os.getenv("PAYWALLS_KEY"))
 use_flowxo = bool(os.getenv("FLOWXO_WEBHOOK_URL"))
 FLOWXO_WEBHOOK = os.getenv("FLOWXO_WEBHOOK_URL")
+PAYWALL_LOG = "data/healing_revenue.log"
 
 # ============================================================
-# 🚀 Initialize FastAPI App
+# 🚀 FastAPI App Initialization
 # ============================================================
 app = FastAPI(
-    title="IBM Workflow Healing Agent — Real-Time Monetization Edition",
-    version="3.5"
+    title="IBM Workflow Healing Agent — Monetization & FlowXO Edition",
+    version="4.0"
 )
 
 app.add_middleware(
@@ -85,60 +99,50 @@ def health():
     }
 
 # ============================================================
-# ⚡ Real-Time Webhook Endpoint (FlowXO / External Systems)
+# ⚡ Real-Time Webhook Integration (FlowXO / External Systems)
 # ============================================================
 @app.post("/webhook")
-async def receive_event(request: Request):
-    """
-    Real-time listener for workflow anomalies.
-    Can be triggered by FlowXO, Zapier, or custom APIs.
-    """
+async def webhook_listener(request: Request):
+    """Handles incoming webhook events and triggers auto-healing."""
     data = await request.json()
-    workflow_id = data.get("workflow_id", "unknown_workflow")
+    workflow = data.get("workflow_id", "unknown_workflow")
     anomaly = data.get("anomaly", "unknown_anomaly")
     user_id = data.get("user_id", "demo_client")
 
-    print(f"📡 [Webhook] Event → Workflow: {workflow_id}, Anomaly: {anomaly}, User: {user_id}")
+    print(f"📡 [Webhook] {workflow} | {anomaly} | User: {user_id}")
 
     # 🔹 Execute Healing
-    result = executor.heal(workflow_id, anomaly)
+    result = executor.heal(workflow, anomaly)
     healing_status = result.get("status", "unknown")
-    recovery_pct = result.get("recovery_pct", 0)
+    recovery = result.get("recovery_pct", 0)
     reward = result.get("reward", 0)
 
-    # 💰 Monetization
+    # 💰 Monetize Healing
     billing = bill_healing_event(user_id, anomaly, cost=0.05)
 
-    # 🔁 Notify FlowXO of Healing Completion
+    # 🔁 Notify FlowXO
     if FLOWXO_WEBHOOK:
         payload = {
-            "workflow_id": workflow_id,
+            "workflow_id": workflow,
             "anomaly": anomaly,
-            "user_id": user_id,
-            "healing_status": healing_status,
-            "recovery_pct": recovery_pct,
-            "reward": reward,
+            "status": healing_status,
+            "recovery_pct": recovery,
             "billing": billing,
             "timestamp": datetime.utcnow().isoformat(),
-            "message": f"✅ Healed {workflow_id} ({anomaly}) | Recovery: {recovery_pct}% | Charged: ${billing.get('amount', 0.05):.2f}"
         }
         try:
-            response = requests.post(FLOWXO_WEBHOOK, json=payload, timeout=10)
-            if response.status_code in [200, 201]:
-                print(f"[FlowXO] ✅ Notification sent for {workflow_id}")
-            else:
-                print(f"[FlowXO] ⚠️ FlowXO response {response.status_code}")
+            r = requests.post(FLOWXO_WEBHOOK, json=payload, timeout=8)
+            print(f"[FlowXO] Notification sent → {r.status_code}")
         except Exception as e:
-            print(f"[FlowXO] ❌ Error sending FlowXO update: {e}")
+            print(f"[FlowXO] ⚠️ Notification failed: {e}")
 
-    # Log event for metrics / dashboard
-    metrics_logger.log_flowxo_event(workflow_id, anomaly, user_id)
+    metrics_logger.log_flowxo_event(workflow, anomaly, user_id)
 
     return {
-        "workflow": workflow_id,
+        "workflow": workflow,
         "anomaly": anomaly,
         "status": healing_status,
-        "recovery_pct": recovery_pct,
+        "recovery_pct": recovery,
         "reward": reward,
         "billing": billing,
     }
@@ -148,25 +152,19 @@ async def receive_event(request: Request):
 # ============================================================
 @app.post("/simulate")
 def simulate(event: str = "workflow_delay"):
+    """Simulate one healing cycle."""
     workflow = random.choice(["invoice_processing", "order_processing", "customer_support"])
     anomaly = event if event in policies.POLICY_MAP else random.choice(list(policies.POLICY_MAP.keys()))
     result = executor.heal(workflow, anomaly)
-
-    billing_info = bill_healing_event(
-        user_id="demo_client",
-        heal_type=anomaly,
-        cost=0.05,
-    )
+    billing = bill_healing_event("demo_client", anomaly, cost=0.05)
 
     return {
         "workflow": workflow,
         "anomaly": anomaly,
-        "suggested_actions": result.get("actions", []),
         "status": result.get("status"),
         "recovery_pct": result.get("recovery_pct"),
         "reward": result.get("reward"),
-        "engine": "Watsonx.ai" if use_watsonx else ("Groq Local" if use_groq else "Fallback"),
-        "billing": billing_info,
+        "billing": billing,
     }
 
 # ============================================================
@@ -187,183 +185,127 @@ def stop_simulation():
 # ============================================================
 @app.get("/healing/logs")
 def get_healing_logs(n: int = 50):
-    log_path = settings.HEALING_LOG_PATH
-    if not os.path.exists(log_path):
+    path = settings.HEALING_LOG_PATH
+    if not os.path.exists(path):
         return {"logs": []}
     try:
-        with open(log_path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         logs = [line.strip() for line in lines if line.strip()][-n:]
         logs.reverse()
         return {"logs": logs}
     except Exception as e:
-        return {"logs": [f"⚠️ Error reading logs: {str(e)}"]}
+        return {"logs": [f"⚠️ Error reading logs: {e}"]}
 
 # ============================================================
-# 📊 Metrics Download
-# ============================================================
-@app.get("/metrics/download")
-def metrics_download():
-    if not os.path.exists(settings.METRICS_LOG_PATH):
-        raise HTTPException(status_code=404, detail="No metrics file found.")
-    return FileResponse(settings.METRICS_LOG_PATH, media_type="text/csv", filename="metrics_log.csv")
-
-# ============================================================
-# 📈 Metrics Summary for Dashboard
+# 📊 Metrics Summary & Download
 # ============================================================
 @app.get("/metrics/summary")
 def metrics_summary():
     summary = metrics_logger.summary()
-    clean_summary = {}
+    clean = {}
     for k, v in summary.items():
         try:
             val = float(v)
             if math.isnan(val) or math.isinf(val):
                 val = 0.0
-            clean_summary[k] = round(val, 2)
-        except Exception:
-            clean_summary[k] = v
+            clean[k] = round(val, 2)
+        except:
+            clean[k] = v
 
-    anomaly_mix = {}
+    # Anomaly distribution
     try:
         if os.path.exists(settings.METRICS_LOG_PATH):
             df = pd.read_csv(settings.METRICS_LOG_PATH)
-            if not df.empty and "anomaly" in df.columns:
-                df = df.dropna(subset=["anomaly"])
-                anomaly_mix = df["anomaly"].value_counts().to_dict()
-    except Exception as e:
-        print(f"[Metrics Summary] ⚠️ Failed to parse anomaly mix: {e}")
-    clean_summary["anomaly_mix"] = anomaly_mix
-
-    try:
-        if os.path.exists(settings.METRICS_LOG_PATH):
-            df = pd.read_csv(settings.METRICS_LOG_PATH)
-            clean_summary["last_action"] = str(df["action"].iloc[-1]) if "action" in df.columns else "N/A"
+            clean["anomaly_mix"] = df["anomaly"].dropna().value_counts().to_dict()
     except Exception:
-        clean_summary["last_action"] = "N/A"
-    return clean_summary
+        clean["anomaly_mix"] = {}
+    return clean
+
+@app.get("/metrics/download")
+def download_metrics():
+    if not os.path.exists(settings.METRICS_LOG_PATH):
+        raise HTTPException(status_code=404, detail="No metrics found.")
+    return FileResponse(settings.METRICS_LOG_PATH, media_type="text/csv", filename="metrics_log.csv")
 
 # ============================================================
-# 💹 Monetization Data for Dashboard
+# 💹 Monetization Data
 # ============================================================
-PAYWALL_LOG = "data/healing_revenue.log"
-os.makedirs("data", exist_ok=True)
-
 @app.get("/metrics/revenue")
-def get_revenue_data():
+def get_revenue():
     data = []
-    total_revenue = 0.0
+    total_rev = 0
     total_heals = 0
-    restart_marker = datetime.now().strftime("%Y-%m-%d")
-
     if os.path.exists(PAYWALL_LOG):
         with open(PAYWALL_LOG, "r", encoding="utf-8") as f:
-            for line in f.readlines():
-                parts = line.strip().split("|")
-                if len(parts) >= 4 and restart_marker in parts[0]:
-                    ts, workflow, anomaly, cost, *_ = [p.strip() for p in parts]
+            for line in f:
+                parts = [p.strip() for p in line.strip().split("|")]
+                if len(parts) >= 4:
+                    ts, wf, anom, cost = parts[:4]
                     try:
-                        cost_val = float(cost.replace("$", "").strip())
+                        val = float(cost.replace("$", "").strip())
                     except:
-                        cost_val = 0.0
-                    total_revenue += cost_val
+                        val = 0.0
+                    total_rev += val
                     total_heals += 1
                     data.append({
                         "Timestamp": ts,
-                        "Workflow": workflow,
-                        "Anomaly": anomaly,
-                        "Cost ($)": cost_val
+                        "Workflow": wf,
+                        "Anomaly": anom,
+                        "Cost ($)": val
                     })
-
     return {
-        "total_revenue": round(total_revenue, 4),
+        "total_revenue": round(total_rev, 3),
         "total_heals": total_heals,
         "logs": data
     }
 
 # ============================================================
-# 🚀 Startup Message
+# 🧾 Healing Slip PDF Generator
+# ============================================================
+def generate_pdf_slip(result: dict) -> BytesIO:
+    """Generate a small PDF slip for healing events."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Workflow Healing Slip", ln=True, align="C")
+
+    pdf.set_font("Arial", "", 12)
+    billing = result.get("billing", {})
+    lines = [
+        f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"User: {billing.get('user', 'N/A')}",
+        f"Workflow: {result.get('workflow')}",
+        f"Anomaly: {result.get('anomaly')}",
+        f"Status: {result.get('status')}",
+        f"Recovery: {result.get('recovery_pct', 0)}%",
+        f"Reward: {result.get('reward', 0)}",
+        f"Amount Charged: ${billing.get('amount', 0.05):.2f}",
+    ]
+    pdf.ln(6)
+    for l in lines:
+        pdf.cell(0, 9, l, ln=True)
+
+    pdf_bytes = pdf.output(dest="S").encode("latin-1")
+    return BytesIO(pdf_bytes)
+
+@app.post("/generate-slip")
+async def generate_slip(request: Request):
+    """Endpoint to generate healing slip PDF from payload."""
+    result = await request.json()
+    pdf_bytes = generate_pdf_slip(result)
+    filename = f"healing_slip_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    return StreamingResponse(pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+# ============================================================
+# 🚀 Startup Log
 # ============================================================
 @app.on_event("startup")
-def startup_event():
-    print("\n🚀 IBM Workflow Healing Agent (Prototype-to-Profit) started successfully!")
+def startup():
+    print("\n🚀 IBM Workflow Healing Agent (v4.0) started successfully!")
     print(f"   ▪ App: {settings.APP_NAME}")
-    print(f"   ▪ Paywalls.ai Integrated: {use_paywalls}")
     print(f"   ▪ FlowXO Connected: {use_flowxo}")
-    print(f"   ▪ Log Path: {metrics_logger.flowxo_log_path.resolve()}")
-    if use_watsonx:
-        print("   ▪ Mode: IBM Watsonx.ai 🧠")
-    elif use_groq:
-        print("   ▪ Mode: Groq Local Llama ⚡")
-    else:
-        print("   ▪ Mode: Offline Fallback (Static Policies)")
+    print(f"   ▪ Paywalls.ai Enabled: {use_paywalls}")
+    print(f"   ▪ Mode: {'Watsonx.ai' if use_watsonx else ('Groq Local' if use_groq else 'Offline')}")
+    print(f"   ▪ Metrics Path: {metrics_logger.flowxo_log_path.resolve()}")
     print(f"   ▪ Loaded Policies: {list(policies.POLICY_MAP.keys())}\n")
-
-
-
-
-
-# #################################################################
-
-def generate_pdf_slip(result: dict) -> BytesIO:
-    """Create a small PDF slip for a healing event."""
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_author("AI Workflow Healer")
-    pdf.set_title("Healing Billing Slip")
-
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Workflow Healing Billing Slip", ln=True, align="C")
-
-    pdf.set_font("Arial", "", 12)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    billing = result.get("billing", {})
-    lines = [
-        f"Date: {now}",
-        f"User ID: {billing.get('user', 'N/A')}",
-        f"Workflow: {result.get('workflow')}",
-        f"Anomaly: {result.get('anomaly')}",
-        f"Heal Status: {result.get('status')}",
-        f"Recovery: {result.get('recovery_pct')}%",
-        f"Reward: {result.get('reward')}",
-        f"Amount Charged: ${billing.get('amount', 0.05):.2f}",
-        f"Mode: {billing.get('mode', 'local')} | Status: {billing.get('status', 'simulated')}",
-    ]
-    pdf.ln(6)
-    for ln in lines:
-        pdf.cell(0, 9, ln, ln=True)
-
-    # ✅ Correct way: output PDF as bytes in memory
-    pdf_bytes = pdf.output(dest="S").encode("latin-1")
-    return BytesIO(pdf_bytes)
-
-    """Create a small PDF slip for a healing event."""
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_author("AI Workflow Healer")
-    pdf.set_title("Healing Billing Slip")
-
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Workflow Healing Billing Slip", ln=True, align="C")
-
-    pdf.set_font("Arial", "", 12)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    billing = result.get("billing", {})
-    lines = [
-        f"Date: {now}",
-        f"User ID: {billing.get('user', 'N/A')}",
-        f"Workflow: {result.get('workflow')}",
-        f"Anomaly: {result.get('anomaly')}",
-        f"Heal Status: {result.get('status')}",
-        f"Recovery: {result.get('recovery_pct')}%",
-        f"Reward: {result.get('reward')}",
-        f"Amount Charged: ${billing.get('amount', 0.05):.2f}",
-        f"Mode: {billing.get('mode', 'local')} | Status: {billing.get('status', 'simulated')}",
-    ]
-    pdf.ln(6)
-    for ln in lines:
-        pdf.cell(0, 9, ln, ln=True)
-
-    # ✅ Correct way to get PDF bytes in memory
-    pdf_bytes = pdf.output(dest="S").encode("latin-1")
-    return BytesIO(pdf_bytes)
