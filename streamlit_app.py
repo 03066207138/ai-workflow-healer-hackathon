@@ -20,7 +20,11 @@ from streamlit_autorefresh import st_autorefresh
 # ------------------------------
 # 🔧 CONFIG — set your backend
 # ------------------------------
-BACKEND_URL = os.environ.get("HEALER_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+BACKEND_URL = os.environ.get(
+    "HEALER_BACKEND_URL",
+    "https://ai-workflow-healer-hackathon-1.onrender.com"
+).rstrip("/")
+
 AUTO_TRIGGER_SECONDS = 15
 AUTO_REFRESH_MS = 5000
 HTTP_TIMEOUT = 15
