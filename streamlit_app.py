@@ -22,7 +22,7 @@ from streamlit_autorefresh import st_autorefresh
 # ------------------------------
 BACKEND_URL = os.environ.get(
     "HEALER_BACKEND_URL",
-    "https://ai-workflow-healer-hackathon-1.onrender.com"
+    "https://ai-workflow-healer-hackathon-2.onrender.com"
 ).rstrip("/")
 
 AUTO_TRIGGER_SECONDS = 15
