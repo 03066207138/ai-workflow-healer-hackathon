@@ -1,19 +1,15 @@
 # ============================================================
-# 🌐 IBM Workflow Healing Agent — Prototype-to-Profit (v4.0)
-# Real-Time Monetization + FlowXO + PDF Slip Generation
+# 🌐 IBM Workflow Healing Agent — Prototype-to-Profit (v4.1)
+# Clean Logging + Real-Time Monetization + FlowXO + PDF Slip
 # ============================================================
 
-import os
-import math
-import random
-import requests
-import pandas as pd
+import os, math, random, requests, pandas as pd
 from datetime import datetime
 from pathlib import Path
 from io import BytesIO
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from dotenv import load_dotenv
 from fpdf import FPDF
 
@@ -65,11 +61,25 @@ FLOWXO_WEBHOOK = os.getenv("FLOWXO_WEBHOOK_URL")
 PAYWALL_LOG = "data/healing_revenue.log"
 
 # ============================================================
+# 🧠 Duplicate-Protection Logger
+# ============================================================
+_last_logs = {}
+
+def safe_log(workflow, anomaly, user_id):
+    """Avoid duplicate entries within 2 seconds for same event."""
+    now = datetime.now()
+    key = f"{workflow}_{anomaly}_{user_id}"
+    if key in _last_logs and (now - _last_logs[key]).total_seconds() < 2:
+        return
+    _last_logs[key] = now
+    metrics_logger.log_flowxo_event(workflow, anomaly, user_id)
+
+# ============================================================
 # 🚀 FastAPI App Initialization
 # ============================================================
 app = FastAPI(
     title="IBM Workflow Healing Agent — Monetization & FlowXO Edition",
-    version="4.0"
+    version="4.1"
 )
 
 app.add_middleware(
@@ -120,7 +130,10 @@ async def webhook_listener(request: Request):
     # 💰 Monetize Healing
     billing = bill_healing_event(user_id, anomaly, cost=0.05)
 
-    # 🔁 Notify FlowXO
+    # ✅ Log once per cycle
+    safe_log(workflow, anomaly, user_id)
+
+    # 🔁 Notify FlowXO once
     if FLOWXO_WEBHOOK:
         payload = {
             "workflow_id": workflow,
@@ -135,8 +148,6 @@ async def webhook_listener(request: Request):
             print(f"[FlowXO] Notification sent → {r.status_code}")
         except Exception as e:
             print(f"[FlowXO] ⚠️ Notification failed: {e}")
-
-    metrics_logger.log_flowxo_event(workflow, anomaly, user_id)
 
     return {
         "workflow": workflow,
@@ -157,6 +168,7 @@ def simulate(event: str = "workflow_delay"):
     anomaly = event if event in policies.POLICY_MAP else random.choice(list(policies.POLICY_MAP.keys()))
     result = executor.heal(workflow, anomaly)
     billing = bill_healing_event("demo_client", anomaly, cost=0.05)
+    safe_log(workflow, anomaly, "demo_client")
 
     return {
         "workflow": workflow,
@@ -213,7 +225,6 @@ def metrics_summary():
         except:
             clean[k] = v
 
-    # Anomaly distribution
     try:
         if os.path.exists(settings.METRICS_LOG_PATH):
             df = pd.read_csv(settings.METRICS_LOG_PATH)
@@ -264,7 +275,6 @@ def get_revenue():
 # 🧾 Healing Slip PDF Generator
 # ============================================================
 def generate_pdf_slip(result: dict) -> BytesIO:
-    """Generate a small PDF slip for healing events."""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
@@ -291,7 +301,6 @@ def generate_pdf_slip(result: dict) -> BytesIO:
 
 @app.post("/generate-slip")
 async def generate_slip(request: Request):
-    """Endpoint to generate healing slip PDF from payload."""
     result = await request.json()
     pdf_bytes = generate_pdf_slip(result)
     filename = f"healing_slip_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
@@ -302,7 +311,7 @@ async def generate_slip(request: Request):
 # ============================================================
 @app.on_event("startup")
 def startup():
-    print("\n🚀 IBM Workflow Healing Agent (v4.0) started successfully!")
+    print("\n🚀 IBM Workflow Healing Agent (v4.1) started successfully!")
     print(f"   ▪ App: {settings.APP_NAME}")
     print(f"   ▪ FlowXO Connected: {use_flowxo}")
     print(f"   ▪ Paywalls.ai Enabled: {use_paywalls}")
